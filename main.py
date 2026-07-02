@@ -37,8 +37,8 @@ class VivianVale(Star):
     # 生命周期
     # --------------------------------------------------------
 
-    async def initialize(self, ctx: Context):
-        self._ctx = ctx
+    async def initialize(self):
+        self._ctx = self.context  # v4: Star.__init__ already set self.context
         self.state = StateStore()
         self._plugin_dir = Path(__file__).parent
         self._skills_root = self._plugin_dir / "skills"
@@ -57,8 +57,8 @@ class VivianVale(Star):
         # 启动 silence-bleed 后台轮询
         self._silence_task = asyncio.create_task(self._silence_check_loop())
 
-    async def dispose(self):
-        """插件卸载时取消后台任务"""
+    async def terminate(self):
+        """插件卸载时取消后台任务 (v4 lifecycle hook)"""
         self._silence_task.cancel()
         try:
             await self._silence_task
