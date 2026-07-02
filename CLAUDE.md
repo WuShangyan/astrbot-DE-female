@@ -20,7 +20,7 @@ parsing.py       Pure helpers: detect_toggle, extract_skill_name, infer_directio
 banners.py       Banner string renderers (toggle/sleep/failure)
 epigraphs.py     Skill-idle whisper strings, organized by category
 personas/        persona_base.md + persona_de.md (Chinese prose)
-skills/          24 skill dirs + 2 metadata dirs (see below)
+skills/          24 skill dirs + 1 help page (see below)
 metadata.yaml    AstrBot plugin manifest
 plugin.json      AstrBot plugin manifest (older/duplicate)
 ```
@@ -29,11 +29,10 @@ plugin.json      AstrBot plugin manifest (older/duplicate)
 
 One subdirectory per skill, each containing a single `SKILL.md` with YAML frontmatter (`name:`, `description:`, optional `disable-model-invocation:`) and a body that starts at the first `# ` heading. Skill IDs are English (`logic`, `rhetoric`, `shivers`, …); the body title carries the Chinese name (e.g. `# 逻辑思维 [智力系]`).
 
-Two directories in `skills/` are **not** 24-skill content and are skipped at load time (constant `_SKILL_DIR_SKIP` in `main.py`):
-- `skills/de-toggle/` — toggle command spec & 24-skill manifest table.
+One directory in `skills/` is **not** 24-skill content and is skipped at load time (constant `_SKILL_DIR_SKIP` in `main.py`):
 - `skills/skills/` — the user-facing `/disco-elysium:skills` help page.
 
-The full 24-skill mapping (Chinese ↔ English) is enumerated in `skills/de-toggle/SKILL.md` and mirrored in `epigraphs.SKILL_EPIGRAPHS`.
+The full 24-skill mapping (Chinese ↔ English) lives in `epigraphs.SKILL_EPIGRAPHS`; a user-facing manifest lives in `skills/skills/SKILL.md`.
 
 ## Runtime architecture (the "9 Duties")
 

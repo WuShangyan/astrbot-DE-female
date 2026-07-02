@@ -152,8 +152,7 @@ git clone https://github.com/<your-fork>/astrbot-DE-female.git
 ├── personas/            人格文档
 │   ├── persona_base.md  基础人格(始终生效)
 │   └── persona_de.md    DE 模式人格层
-├── skills/              24 个技能 SKILL.md + 元信息目录
-│   ├── de-toggle/       toggle 指令 + 技能清单
+├── skills/              24 个技能 SKILL.md + 帮助页
 │   ├── skills/          /skills 列表页
 │   └── <24 skill_ids>/  技能正文
 ├── metadata.yaml        AstrBot 插件清单

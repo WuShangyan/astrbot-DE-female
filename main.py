@@ -24,7 +24,7 @@ from .epigraphs import get_epigraph
 # 常量
 # ============================================================
 
-_SKILL_DIR_SKIP = {"skills", "de-toggle"}
+_SKILL_DIR_SKIP = {"skills"}
 
 # ============================================================
 # 插件主类
