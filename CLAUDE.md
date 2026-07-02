@@ -73,5 +73,5 @@ Background task: `_silence_check_loop` runs every 30 min, proactively pushes a "
 
 ## Manifests
 
-- `metadata.yaml` and `plugin.json` carry the same identity (`name: vivian-vale`, version, author, homepage). Update both if bumping the version.
-- AstrBot discovers the plugin via `@register_star` on `VivianVale` in `main.py` — renaming the class or module requires updating AstrBot's plugin loader config.
+- `metadata.yaml` and `plugin.json` carry the same identity (`name: vivian_vale`, version, author, homepage). Update both if bumping the version. The `name` field must be a valid Python identifier (no hyphens).
+- AstrBot discovers the plugin via the `name` field in `metadata.yaml` — v4 plugins just inherit from `Star` (no decorator). Renaming the class or module is fine as long as `metadata.yaml` is updated to match.

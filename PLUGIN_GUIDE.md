@@ -268,7 +268,7 @@ async def _silence_check_loop(self):
 
 **职责**:挂 AstrBot 的 5 个 hook,管理生命周期,做 LLM 调用。
 
-**关键类**:`VivianVale(Star)`,由 `@register_star` 装饰,AstrBot 启动时自动发现并注册。
+**关键类**:`VivianVale(Star)`,继承 `Star`(v4 不需要装饰器),AstrBot 启动时按 `metadata.yaml` 的 `name` 自动发现并注册。
 
 **关键方法**:
 
@@ -398,7 +398,7 @@ for skill_dir in sorted(self._skills_root.iterdir()):
 
 ### 5.1 前置条件
 
-- **AstrBot v3.x** — 插件用的是 `@register_star` / `Star` / `Context.send_llm` API,v4 及以上可能不兼容
+- **AstrBot v4.x** — 插件继承 `Star` 类,v4 由 `metadata.yaml` 的 `name` 自动发现;v3 及以下不兼容
 - **Python 3.10+** — 代码用了 `str | None` 语法,3.9 及以下解析不过
 - **零第三方依赖** — 不需要 `pip install` 任何东西,只依赖 AstrBot 自身
 - 一个能跑 AstrBot 的环境(本机 / Docker / 服务器)
@@ -432,8 +432,8 @@ git clone https://github.com/<owner>/astrbot-DE-female.git
 #### 方法 C(可选):重命名仓库
 
 如果你 fork 了这个仓库并打算发布到市场:
-1. 在 GitHub 上把仓库 rename 为 `astrbot-plugin-vivian-vale`
-2. 同时改 `metadata.yaml` 里的 `name: vivian-vale`(已经是对的不用改)
+1. 在 GitHub 上把仓库 rename 为 `astrbot_plugin_vivian_vale`(AstrBot v4 推荐 `astrbot_plugin_<name>` 前缀)
+2. `metadata.yaml` 里的 `name` 保持为 `vivian_vale`(已经是对的不用改)
 3. 再走方法 A 即可
 
 ### 5.3 安装验证
@@ -442,7 +442,7 @@ git clone https://github.com/<owner>/astrbot-DE-female.git
 
 启动时,日志里应该出现类似:
 ```
-[Plugin] Loaded vivian-vale v0.1.0
+[Plugin] Loaded vivian_vale v0.1.0
 [Plugin] Vivian Vale: loaded 24 skills
 [Plugin] Vivian Vale: silence-bleed task started
 ```
@@ -467,7 +467,7 @@ git clone https://github.com/<owner>/astrbot-DE-female.git
 | 症状 | 可能原因 | 解决 |
 |---|---|---|
 | WebUI 搜不到 / 装不上 | 仓库名不符合约定 | 用方法 B 手动 clone |
-| 启动报 `ImportError: cannot import name 'Star'` | AstrBot 版本 < v3 | 升级 AstrBot |
+| 启动报 `ImportError: cannot import name 'Star'` | AstrBot 版本 < v4 | 升级 AstrBot |
 | 启动报 `SyntaxError` | Python < 3.10 | 升级 Python |
 | 启动后 `芝麻开门` 没反应 | AstrBot 还没加载完 | 等几秒重发 |
 | 私聊测试 OK,群聊没反应 | 没 @ 机器人 | 群聊必须 @ 才会回复 |
@@ -635,7 +635,6 @@ git clone https://github.com/<owner>/astrbot-DE-female.git
 
 | API | 用途 | 位置 |
 |---|---|---|
-| `@register_star` | 注册插件类 | `main.py` |
 | `Star` | 插件基类 | `main.py` |
 | `Context` | AstrBot 上下文(用来调 LLM / 发消息) | `main.py` |
 | `AstrMessageEvent` | 消息事件对象 | `main.py` |

@@ -46,7 +46,7 @@ git clone https://github.com/<your-fork>/astrbot-DE-female.git
 
 ### 版本要求
 
-- **AstrBot v3.x**(使用 `@register_star` / `Star` / `Context.send_llm` API)
+- **AstrBot v4.x**(使用 v4 插件 API: 插件类继承 `Star`、无需装饰器、由 `metadata.yaml` 中的 `name` 自动发现)
 - Python 3.10+(代码用了 `str | None` 语法)
 - 零第三方 Python 依赖,只依赖 AstrBot 自身
 

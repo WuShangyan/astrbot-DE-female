@@ -7,7 +7,7 @@ from astrbot.api.event import filter
 from astrbot.api.event.filter import EventMessageType
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Plain
-from astrbot.api.star import Context, Star, register_star
+from astrbot.api.star import Context, Star
 
 from .state import StateStore
 from .parsing import detect_toggle, extract_skill_name, infer_direction, extract_outcome
@@ -30,7 +30,6 @@ _SKILL_DIR_SKIP = {"skills", "de-toggle"}
 # 插件主类
 # ============================================================
 
-@register_star
 class VivianVale(Star):
     """极乐迪斯科 · Vivian Vale — AstrBot Star 插件"""
 
