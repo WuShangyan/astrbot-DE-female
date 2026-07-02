@@ -12,11 +12,12 @@ from astrbot.api.star import Context, Star
 from .state import StateStore
 from .parsing import detect_toggle, extract_skill_name, infer_direction, extract_outcome
 from .banners import (
-    render_toggle_on_banner,
-    render_toggle_off_banner,
+    render_open_banner,
+    render_close_banner,
+    render_clear_banner,
+    render_haze_banner,
+    render_voice_bleed_banner,
     render_sleep_banner,
-    render_failure_hint,
-    render_force_failure,
 )
 from .epigraphs import get_epigraph
 
@@ -39,8 +40,8 @@ class VivianVale(Star):
 
     async def initialize(self):
         self._ctx = self.context  # v4: Star.__init__ already set self.context
-        self.state = StateStore()
         self._plugin_dir = Path(__file__).parent
+        self.state = StateStore(self._plugin_dir / "state.json")
         self._skills_root = self._plugin_dir / "skills"
 
         # 加载 persona 文件
@@ -75,15 +76,16 @@ class VivianVale(Star):
         if self.state.check_sleep_window(now.hour):
             yield event.plain_result("……四点了。睡觉。明天再说。")
             return
-        self.state.de_enabled = True
-        self.state.opened_today = True
-        self.state.de_toggle_ts = now.timestamp()
-        yield event.plain_result(render_toggle_on_banner())
+        conv_id = event.unified_msg_origin
+        self.state.set_open(conv_id, True, toggle_ts=now.timestamp())
+        yield event.plain_result(render_open_banner())
 
     @filter.command("关门")
     async def cmd_close(self, event: AstrMessageEvent):
-        self.state.de_enabled = False
-        yield event.plain_result(render_toggle_off_banner())
+        conv_id = event.unified_msg_origin
+        last_skill = self.state.get_last_skill(conv_id)
+        self.state.set_open(conv_id, False)
+        yield event.plain_result(render_close_banner(last_skill))
 
     # --------------------------------------------------------
     # Duty 1b: 睡眠窗口 + 群聊过滤 + 方向推断 + voice bleed
@@ -97,8 +99,9 @@ class VivianVale(Star):
 
         # ── 物理层: 睡眠窗口自动关闭 DE ──
         if self.state.check_sleep_window(now.hour) and self.state.de_enabled:
-            self.state.de_enabled = False
-            self.state.opened_today = False
+            conv_id = event.unified_msg_origin
+            self.state.set_open(conv_id, False)
+            self.state.opened_today = False  # separate from set_open — sleep truly closes the day
             yield event.plain_result(render_sleep_banner())
             return
 
@@ -158,6 +161,11 @@ class VivianVale(Star):
         resp_text = response.completion_text
         outcome = extract_outcome(resp_text)
         self.state.record_failure(outcome == "失败")
+        if self.state.de_enabled:
+            skill_name = extract_skill_name(resp_text)
+            if skill_name:
+                conv_id = event.unified_msg_origin
+                self.state.set_last_skill(conv_id, skill_name)
 
     # --------------------------------------------------------
     # Duty 9: 身份边界 + 语音守卫(装饰层)
@@ -168,6 +176,25 @@ class VivianVale(Star):
         result = event.get_result()
         if not result or not result.chain:
             return
+
+        # --- Direction transition: emit clear/haze banner if changed --------
+        conv_id = event.unified_msg_origin
+        resp_text = "".join(
+            comp.text for comp in result.chain if isinstance(comp, Plain)
+        )
+        new_direction = infer_direction(resp_text)
+        prev_direction = self.state.get_direction(conv_id)
+        if self.state.de_enabled and new_direction and new_direction != prev_direction:
+            banner = render_clear_banner() if new_direction == "清" else render_haze_banner()
+            try:
+                # AstrBot v4: use Context.send_message with conv_id (no event.send API).
+                await self._ctx.send_message(conv_id, [Plain(text=banner)])
+            except Exception:
+                pass  # never block the main reply
+        if new_direction:
+            self.state.set_direction(conv_id, new_direction)
+
+        # --- Identity scrub + length cap (existing behavior) ---------------
         for comp in result.chain:
             if isinstance(comp, Plain):
                 # 身份边界: 替换泄露
