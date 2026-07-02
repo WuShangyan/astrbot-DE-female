@@ -7,9 +7,13 @@ voice-bleed gating.  Self-contained -- no external dependencies.
 
 from __future__ import annotations
 
+import json
+import logging
 import random
+import tempfile
+import threading
 import time
-from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal, Optional
 
 # Sliding window size for drunk-counter pruning (12 hours in seconds).
@@ -19,41 +23,136 @@ _DRUNK_WINDOW: int = 12 * 3600
 _VOICE_BLEED_COOLDOWN: int = 4 * 3600
 
 
-@dataclass
 class StateStore:
-    """Mutable, single-session state bag.
+    """Mutable, single-session state bag with optional JSON persistence.
 
-    Not persisted to disk and not thread-safe on its own -- the caller
-    (typically the AstrBot event handler) is responsible for serialising
-    access if needed.
+    Pass ``path`` to enable JSON persistence; omit for pure in-memory use.
+    Field mutations are serialised with an internal ``threading.Lock`` and
+    (when persistence is enabled) flushed to disk after each mutating call.
+    Not safe to share a single instance across processes -- one file per
+    process. Field defaults are applied in ``__init__`` so custom kwargs
+    (e.g. ``opened_today=True``) override them on construction -- this
+    keeps the test-only constructors working.
     """
 
     # -- DE mode toggle ---------------------------------------------------
-    de_enabled: bool = False
-    de_toggle_ts: float = 0.0
+    de_enabled: bool
+    de_toggle_ts: float
 
     # -- daily open tracking (voice-bleed gate) ---------------------------
-    opened_today: bool = False
+    opened_today: bool
 
     # -- drunk state ------------------------------------------------------
-    drunk_counter: int = 0
-    _drunk_timestamps: list[float] = field(default_factory=list)
+    drunk_counter: int
+    _drunk_timestamps: list[float]
 
     # -- failure streak (hybrid rhythm, spec 4.3) -------------------------
-    failure_streak: int = 0
+    failure_streak: int
 
     # -- per-conversation direction cache ---------------------------------
-    _direction_cache: dict[str, Optional[Literal["清", "混"]]] = field(
-        default_factory=dict,
-    )
+    _direction_cache: dict[str, Optional[Literal["清", "混"]]]
 
     # -- voice-bleed tracking ---------------------------------------------
-    _voice_bleed_last_ts: float = 0.0
-    _voice_bleed_last_skill: str = ""
+    _voice_bleed_last_ts: float
+    _voice_bleed_last_skill: str
 
     # -- silence-bleed (proactive muttering after long silence) -----------
-    _silence_bleed_last_ts: float = 0.0
-    _last_message_ts: dict[str, float] = field(default_factory=dict)
+    _silence_bleed_last_ts: float
+    _last_message_ts: dict[str, float]
+
+    # -- per-conversation last skill (banner source) ----------------------
+    _last_skill: dict[str, str | None]
+
+    # -- persistence infrastructure ---------------------------------------
+    _path: Path | None
+    _lock: threading.Lock
+
+    def __init__(self, path: Path | None = None, **kwargs) -> None:
+        """State store. Pass ``path`` to enable JSON persistence; omit for
+        in-memory mode. Keyword args override field defaults -- kept for
+        back-compat with the legacy dataclass-style test constructors."""
+        self.de_enabled = kwargs.pop("de_enabled", False)
+        self.de_toggle_ts = kwargs.pop("de_toggle_ts", 0.0)
+        self.opened_today = kwargs.pop("opened_today", False)
+        self.drunk_counter = kwargs.pop("drunk_counter", 0)
+        self._drunk_timestamps = kwargs.pop("_drunk_timestamps", [])
+        self.failure_streak = kwargs.pop("failure_streak", 0)
+        self._direction_cache = kwargs.pop("_direction_cache", {})
+        self._voice_bleed_last_ts = kwargs.pop("_voice_bleed_last_ts", 0.0)
+        self._voice_bleed_last_skill = kwargs.pop("_voice_bleed_last_skill", "")
+        self._silence_bleed_last_ts = kwargs.pop("_silence_bleed_last_ts", 0.0)
+        self._last_message_ts = kwargs.pop("_last_message_ts", {})
+        self._last_skill = {}
+        if kwargs:
+            raise TypeError(
+                f"StateStore.__init__ got unexpected keyword args: "
+                f"{sorted(kwargs.keys())}"
+            )
+        self._path = path
+        self._lock = threading.Lock()
+        self._load()
+
+    def _save(self) -> None:
+        """Persist ALL state to JSON. Flat shape -- typed fields at top
+        level, per-conversation dicts nested by conv_id. No-op when no
+        path was supplied (pure in-memory mode)."""
+        if self._path is None:
+            return
+        state = {
+            "de_enabled": self.de_enabled,
+            "de_toggle_ts": self.de_toggle_ts,
+            "opened_today": self.opened_today,
+            "drunk_counter": self.drunk_counter,
+            "_drunk_timestamps": list(self._drunk_timestamps),
+            "failure_streak": self.failure_streak,
+            "_direction_cache": dict(self._direction_cache),
+            "_voice_bleed_last_ts": self._voice_bleed_last_ts,
+            "_voice_bleed_last_skill": self._voice_bleed_last_skill,
+            "_silence_bleed_last_ts": self._silence_bleed_last_ts,
+            "_last_message_ts": dict(self._last_message_ts),
+            "_last_skill": dict(self._last_skill),
+        }
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.write_text(
+                json.dumps(state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            logging.warning(
+                f"state.json save failed ({e}); state kept in memory only"
+            )
+
+    def _load(self) -> None:
+        """Restore state from JSON. Silent fallback to default state on any
+        error -- corrupt, missing, or unreadable file -> fresh defaults."""
+        if self._path is None or not self._path.exists():
+            return
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+            if not raw.strip():
+                return
+            data = json.loads(raw)
+            self.de_enabled = data.get("de_enabled", False)
+            self.de_toggle_ts = data.get("de_toggle_ts", 0.0)
+            self.opened_today = data.get("opened_today", False)
+            self.drunk_counter = data.get("drunk_counter", 0)
+            self._drunk_timestamps = data.get("_drunk_timestamps", [])
+            self.failure_streak = data.get("failure_streak", 0)
+            self._direction_cache = data.get("_direction_cache", {})
+            self._voice_bleed_last_ts = data.get("_voice_bleed_last_ts", 0.0)
+            self._voice_bleed_last_skill = data.get(
+                "_voice_bleed_last_skill", ""
+            )
+            self._silence_bleed_last_ts = data.get(
+                "_silence_bleed_last_ts", 0.0
+            )
+            self._last_message_ts = data.get("_last_message_ts", {})
+            self._last_skill = data.get("_last_skill", {})
+        except (json.JSONDecodeError, OSError) as e:
+            logging.warning(
+                f"state.json corrupt/unreadable ({e}); using empty default"
+            )
 
     # ---------------------------------------------------------------------
     # Drunk helpers
@@ -66,19 +165,22 @@ class StateStore:
         * Prune entries older than the 12-hour sliding window so the
           counter naturally decays.
         """
-        now = time.time()
+        with self._lock:
+            now = time.time()
 
-        # Prune old entries outside the sliding window.
-        cutoff = now - _DRUNK_WINDOW
-        self._drunk_timestamps = [
-            ts for ts in self._drunk_timestamps if ts > cutoff
-        ]
-        # Also fix the counter to match pruned timestamps.
-        self.drunk_counter = len(self._drunk_timestamps)
+            # Prune old entries outside the sliding window.
+            cutoff = now - _DRUNK_WINDOW
+            self._drunk_timestamps = [
+                ts for ts in self._drunk_timestamps if ts > cutoff
+            ]
+            # Also fix the counter to match pruned timestamps.
+            self.drunk_counter = len(self._drunk_timestamps)
 
-        if direction == "混":
-            self._drunk_timestamps.append(now)
-            self.drunk_counter += 1
+            if direction == "混":
+                self._drunk_timestamps.append(now)
+                self.drunk_counter += 1
+
+            self._save()
 
     def is_drunk(self) -> bool:
         """Return True when the drunk counter has reached the threshold."""
@@ -99,8 +201,10 @@ class StateStore:
 
     def maybe_reset_daily(self, now_hour: int) -> None:
         """Reset ``opened_today`` at 08:00 to start a fresh voice-bleed day."""
-        if now_hour == 8:
-            self.opened_today = False
+        with self._lock:
+            if now_hour == 8:
+                self.opened_today = False
+            self._save()
 
     # ---------------------------------------------------------------------
     # Failure streak (hybrid rhythm, spec section 4.3)
@@ -112,10 +216,12 @@ class StateStore:
         * ``is_failure=True``  -> reset the streak to 0.
         * ``is_failure=False`` -> increment by 1.
         """
-        if is_failure:
-            self.failure_streak = 0
-        else:
-            self.failure_streak += 1
+        with self._lock:
+            if is_failure:
+                self.failure_streak = 0
+            else:
+                self.failure_streak += 1
+            self._save()
 
     def should_force_failure(self) -> bool:
         """Force a [失败] when 8+ consecutive non-failures have been emitted."""
@@ -136,8 +242,10 @@ class StateStore:
     def set_direction(
         self, conv_id: str, direction: Optional[Literal["清", "混"]]
     ) -> None:
-        """Cache (or clear) the direction for *conv_id*."""
-        self._direction_cache[conv_id] = direction
+        """Cache (or clear) the direction for *conv_id*. Persists to JSON."""
+        with self._lock:
+            self._direction_cache[conv_id] = direction
+            self._save()
 
     # ---------------------------------------------------------------------
     # Voice-bleed gating (spec section 4.4.7b)
@@ -163,8 +271,10 @@ class StateStore:
 
     def record_voice_bleed(self, skill: str) -> None:
         """Update the last voice-bleed timestamp and skill name."""
-        self._voice_bleed_last_ts = time.time()
-        self._voice_bleed_last_skill = skill
+        with self._lock:
+            self._voice_bleed_last_ts = time.time()
+            self._voice_bleed_last_skill = skill
+            self._save()
 
     # ---------------------------------------------------------------------
     # Silence-bleed helpers (proactive muttering after long silence)
@@ -178,7 +288,9 @@ class StateStore:
 
     def touch_last_message(self, conv_id: str) -> None:
         """Record that a message was sent in this conversation."""
-        self._last_message_ts[conv_id] = time.time()
+        with self._lock:
+            self._last_message_ts[conv_id] = time.time()
+            self._save()
 
     def can_silence_bleed(self, conv_id: str) -> bool:
         """Check if a silence-bleed can fire for this conversation.
@@ -206,7 +318,43 @@ class StateStore:
 
     def record_silence_bleed(self) -> None:
         """Mark that a silence-bleed just fired."""
-        self._silence_bleed_last_ts = time.time()
+        with self._lock:
+            self._silence_bleed_last_ts = time.time()
+            self._save()
+
+    # ---------------------------------------------------------------------
+    # Toggle / per-conversation skill tracking (Task 2)
+    # ---------------------------------------------------------------------
+
+    def set_open(self, conv_id: str, open_: bool, toggle_ts: float = 0.0) -> None:
+        """User-triggered toggle of DE mode. Persists to JSON.
+
+        ``conv_id`` is currently unused (``de_enabled`` is global) but kept
+        in the API for future per-conv scoping. On open, also resets the
+        per-conv ``last_skill`` so the next close-banner falls back to the
+        opening epigraph.
+        """
+        with self._lock:
+            self.de_enabled = open_
+            if open_:
+                self.opened_today = True
+                self.de_toggle_ts = toggle_ts
+                self._last_skill[conv_id] = None
+            self._save()
+
+    def get_last_skill(self, conv_id: str) -> str | None:
+        """The most recently triggered skill name for this conversation,
+        or ``None`` if no skill has fired yet (or right after a fresh
+        open)."""
+        with self._lock:
+            return self._last_skill.get(conv_id)
+
+    def set_last_skill(self, conv_id: str, name: str | None) -> None:
+        """Record the skill that just fired, so the close banner can quote
+        its epigraph. Persists to JSON."""
+        with self._lock:
+            self._last_skill[conv_id] = name
+            self._save()
 
 
 # ======================================================================
@@ -313,6 +461,70 @@ if __name__ == "__main__":
         s7._voice_bleed_last_skill == "食髓知味",
         "voice bleed skill recorded",
     )
+
+    # -- JSON persistence (Task 2) ---------------------------------------
+
+    def test_set_open_persists_across_instances():
+        """set_open(conv_id, True) → JSON survives reload."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "state.json"
+            s1 = StateStore(path)
+            s1.set_open("conv-1", True, toggle_ts=12345.0)
+            s2 = StateStore(path)
+            assert s2.de_enabled is True, "de_enabled persisted via set_open → reload"
+            assert s2.de_toggle_ts == 12345.0, "de_toggle_ts persisted"
+            assert s2.opened_today is True, "opened_today persisted"
+            assert s2.get_last_skill("conv-1") is None, "last_skill reset to None on open"
+
+    def test_full_state_persists_across_reload():
+        """All typed dataclass fields survive a reload via JSON."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "state.json"
+            s1 = StateStore(path)
+            s1.set_open("conv-A", True)
+            s1.record_failure(True)  # sets failure_streak = 0
+            s1.record_failure(False)
+            s1.record_failure(False)  # streak = 2
+            s1.touch_drunk("混")  # drunk_counter = 1
+            s1.touch_drunk("混")  # drunk_counter = 2
+            s1.set_direction("conv-A", "清")
+            s1.set_last_skill("conv-A", "逻辑思维")
+            s1.touch_last_message("conv-A")
+            s2 = StateStore(path)
+            assert s2.failure_streak == 2, "failure_streak persisted"
+            assert s2.drunk_counter == 2, "drunk_counter persisted"
+            assert s2.get_direction("conv-A") == "清", "direction cache persisted"
+            assert s2.get_last_skill("conv-A") == "逻辑思维", "last_skill persisted"
+            assert "conv-A" in s2._last_message_ts, "last_message_ts persisted"
+
+    def test_corrupt_json_falls_back_to_empty():
+        """Bad JSON on disk → empty default state, no exception."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "state.json"
+            path.write_text("not json", encoding="utf-8")
+            s = StateStore(path)
+            # Should not raise; state starts at dataclass defaults
+            assert s.de_enabled is False, "de_enabled defaults to False on corrupt JSON"
+            assert s.failure_streak == 0, "failure_streak defaults to 0 on corrupt JSON"
+            assert s.get_last_skill("any") is None, "last_skill defaults to None on corrupt JSON"
+
+    def test_missing_json_file_creates_on_first_save():
+        """No file on disk → first mutating call creates it."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "new_state.json"
+            assert not path.exists(), "precondition: file does not exist"
+            s = StateStore(path)
+            s.set_open("conv-1", True)
+            assert path.exists(), "state.json created on first set_open"
+            data = json.loads(path.read_text("utf-8"))
+            # Flat JSON shape — fields at top level, per-conv dicts nested
+            assert data["de_enabled"] is True, "de_enabled at JSON top level"
+            assert data["_last_skill"]["conv-1"] is None, "_last_skill nested dict"
+
+    test_set_open_persists_across_instances()
+    test_full_state_persists_across_reload()
+    test_corrupt_json_falls_back_to_empty()
+    test_missing_json_file_creates_on_first_save()
 
     # -- summary ---------------------------------------------------------
     print()
