@@ -82,7 +82,7 @@ class VivianVale(Star):
         self.state.set_open(conv_id, True, toggle_ts=now.timestamp())
         yield event.plain_result(render_open_banner())
 
-    @filter.command("关门")
+    @filter.command("芝麻关门", alias={"关门"})
     async def cmd_close(self, event: AstrMessageEvent):
         conv_id = event.unified_msg_origin
         last_skill = self.state.get_last_skill(conv_id)
