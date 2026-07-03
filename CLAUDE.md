@@ -18,11 +18,13 @@ main.py          VivianVale Star class, event/hook handlers, LLM injection
 state.py         StateStore dataclass (in-memory, single-session)
 parsing.py       Pure helpers: detect_toggle, extract_skill_name, infer_direction, extract_outcome
 banners.py       Banner string renderers (toggle/sleep/failure)
+**Banner rendering** lives in [`banners.py`](banners.py) with five framed functions sharing the `░▒▓ + 66 █ + ▓▒░` frame: `render_open_banner()` (DE activation, fixed opening epigraph), `render_close_banner(last_skill)` (DE deactivation, epigraph chosen by last skill), `render_clear_banner()` / `render_haze_banner()` (state-transition on direction change), and `render_voice_bleed_banner(skill, sample, body)` (DE-OFF spontaneous leak). `render_sleep_banner()` is the unframed 04:00-08:00 line. Add a new banner → add the function + smoke-test assertions to `banners.py`.
 epigraphs.py     Skill-idle whisper strings, organized by category
 personas/        persona_base.md + persona_de.md (Chinese prose)
 skills/          24 skill dirs + 1 help page (see below)
 metadata.yaml    AstrBot plugin manifest
 plugin.json      AstrBot plugin manifest (older/duplicate)
+├── state.json    # generated at runtime; per-conversation JSON state (gitignored)
 ```
 
 ### `skills/` directory
@@ -48,7 +50,7 @@ Background task: `_silence_check_loop` runs every 30 min, proactively pushes a "
 
 ## Conventions & gotchas
 
-- **State is in-memory only** (no persistence); `StateStore` is not thread-safe. Cancellation of the silence task is handled in `dispose()`.
+- **State persists to `state.json`** in the plugin directory (gitignored). Each `set_*` / `record_*` call rewrites the file; load failure (corrupt JSON, missing file) falls back to empty defaults silently. `StateStore` is thread-safe via `threading.Lock`.
 - **No external deps in `parsing.py` / `state.py`** — they import only stdlib. `main.py` is the only file importing `astrbot.*`. Keep parsing pure for unit-testability.
 - **Smoke tests live inside the modules** as `if __name__ == "__main__":` blocks. Run them directly:
   - `python3 parsing.py` — covers `detect_toggle`, `extract_skill_name`, `infer_direction`, `extract_outcome`.
