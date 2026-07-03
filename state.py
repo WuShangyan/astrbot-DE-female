@@ -63,6 +63,9 @@ class StateStore:
     # -- per-conversation last skill (banner source) ----------------------
     _last_skill: dict[str, str | None]
 
+    # -- per-conversation sleep-edge flag (Task 3) ------------------------
+    was_asleep_last_check: dict[str, bool]
+
     # -- persistence infrastructure ---------------------------------------
     _path: Path | None
     _lock: threading.Lock
@@ -83,6 +86,7 @@ class StateStore:
         self._silence_bleed_last_ts = kwargs.pop("_silence_bleed_last_ts", 0.0)
         self._last_message_ts = kwargs.pop("_last_message_ts", {})
         self._last_skill = {}
+        self.was_asleep_last_check = {}
         if kwargs:
             raise TypeError(
                 f"StateStore.__init__ got unexpected keyword args: "
@@ -111,6 +115,7 @@ class StateStore:
             "_silence_bleed_last_ts": self._silence_bleed_last_ts,
             "_last_message_ts": dict(self._last_message_ts),
             "_last_skill": dict(self._last_skill),
+            "was_asleep_last_check": dict(self.was_asleep_last_check),
         }
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,6 +154,7 @@ class StateStore:
             )
             self._last_message_ts = data.get("_last_message_ts", {})
             self._last_skill = data.get("_last_skill", {})
+            self.was_asleep_last_check = data.get("was_asleep_last_check", {})
         except (json.JSONDecodeError, OSError) as e:
             logging.warning(
                 f"state.json corrupt/unreadable ({e}); using empty default"
@@ -356,6 +362,45 @@ class StateStore:
             self._last_skill[conv_id] = name
             self._save()
 
+    def get_was_asleep(self, conv_id: str) -> bool:
+        """Whether the previous message in this conversation arrived during
+        the sleep window. Used by `on_message` to detect wake/sleep transitions."""
+        with self._lock:
+            return self.was_asleep_last_check.get(conv_id, False)
+
+
+    def set_was_asleep(self, conv_id: str, was_asleep: bool) -> None:
+        """Update the per-conv sleep-edge flag. Persists to JSON."""
+        with self._lock:
+            self.was_asleep_last_check[conv_id] = was_asleep
+            self._save()
+
+
+    def clear_drunk_state(self, conv_id: str) -> None:
+        """Wake hard-reset (§4.4.2 + §4.3 cross-reference): clears the three
+        global drunk-related typed fields (drunk_counter, _drunk_timestamps,
+        failure_streak). Per spec these should be per-conv but the existing
+        implementation has them as global dataclass fields; round 2 follows
+        the existing shape to avoid a state-model refactor outside scope."""
+        with self._lock:
+            self.drunk_counter = 0
+            self._drunk_timestamps = []
+            self.failure_streak = 0
+            self._save()
+
+
+    def clear_full_session(self, conv_id: str) -> None:
+        """§4.4.7a auto-close cleanup: clears per-conv _last_skill +
+        _direction_cache for this conv, plus the three global drunk-related
+        fields. So the next DE session starts fresh for this conversation."""
+        with self._lock:
+            self._last_skill[conv_id] = None
+            self._direction_cache[conv_id] = None
+            self.drunk_counter = 0
+            self._drunk_timestamps = []
+            self.failure_streak = 0
+            self._save()
+
 
 # ======================================================================
 # Smoke tests
@@ -525,6 +570,64 @@ if __name__ == "__main__":
     test_full_state_persists_across_reload()
     test_corrupt_json_falls_back_to_empty()
     test_missing_json_file_creates_on_first_save()
+
+    # -- Round 2: was_asleep + clear_drunk_state + clear_full_session -------
+
+    def test_was_asleep_round_trip():
+        """was_asleep_last_check survives reload via JSON."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "state.json"
+            s1 = StateStore(path)
+            s1.set_was_asleep("conv-1", True)
+            s2 = StateStore(path)
+            assert s2.get_was_asleep("conv-1") is True, "was_asleep persisted"
+            s2.set_was_asleep("conv-1", False)
+            assert s2.get_was_asleep("conv-1") is False, "was_asleep can be flipped"
+
+
+    def test_clear_drunk_state_resets_3_fields():
+        """Wake reset (§4.4.2 + §4.3 cross-reference): drunk_count=0,
+        last_drink_at=None, failure_streak=0. last_skill and direction
+        are preserved per spec."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "state.json"
+            s = StateStore(path)
+            s.set_open("conv-1", True)
+            s.touch_drunk("混")
+            s.touch_drunk("混")
+            s.touch_drunk("混")
+            s.record_failure(False)
+            s.record_failure(False)  # streak = 2
+            s.set_last_skill("conv-1", "通情达理")
+            s.set_direction("conv-1", "清")
+            s.clear_drunk_state("conv-1")
+            assert s.drunk_counter == 0, "drunk_counter reset"
+            assert s.failure_streak == 0, "failure_streak reset (§4.3)"
+            assert s.get_last_skill("conv-1") == "通情达理", "last_skill preserved"
+            assert s.get_direction("conv-1") == "清", "direction preserved"
+
+
+    def test_clear_full_session_resets_5_fields():
+        """Auto-close (§4.4.7a): last_skill=None + drunk_count=0 +
+        last_drink_at=None + last_direction_seen=None + failure_streak=0."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "state.json"
+            s = StateStore(path)
+            s.set_open("conv-1", True)
+            s.set_last_skill("conv-1", "逻辑思维")
+            s.touch_drunk("混")
+            s.set_direction("conv-1", "混")
+            s.record_failure(False)
+            s.record_failure(False)
+            s.clear_full_session("conv-1")
+            assert s.get_last_skill("conv-1") is None, "last_skill cleared"
+            assert s.drunk_counter == 0, "drunk_counter cleared"
+            assert s.get_direction("conv-1") is None, "direction cleared"
+            assert s.failure_streak == 0, "failure_streak cleared"
+
+    test_was_asleep_round_trip()
+    test_clear_drunk_state_resets_3_fields()
+    test_clear_full_session_resets_5_fields()
 
     # -- summary ---------------------------------------------------------
     print()
