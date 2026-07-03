@@ -86,8 +86,7 @@ class VivianVale(Star):
         conv_id = event.unified_msg_origin
         last_skill = self.state.get_last_skill(conv_id)
         self.state.set_open(conv_id, False)
-        self.state.failure_streak = 0  # §4.3:芝麻关门清零 failure_streak
-        self.state._save()              # 立即持久化(单字段写)
+        self.state.reset_failure_streak()
         yield event.plain_result(render_close_banner(last_skill))
 
     # --------------------------------------------------------

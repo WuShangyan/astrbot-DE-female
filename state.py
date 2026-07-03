@@ -63,7 +63,7 @@ class StateStore:
     # -- per-conversation last skill (banner source) ----------------------
     _last_skill: dict[str, str | None]
 
-    # -- per-conversation sleep-edge flag (Task 3) ------------------------
+    # -- per-conversation sleep-edge flag (Task 1) -------------------------
     was_asleep_last_check: dict[str, bool]
 
     # -- persistence infrastructure ---------------------------------------
@@ -398,6 +398,14 @@ class StateStore:
             self._direction_cache[conv_id] = None
             self.drunk_counter = 0
             self._drunk_timestamps = []
+            self.failure_streak = 0
+            self._save()
+
+    def reset_failure_streak(self) -> None:
+        """§4.3 manual close: clears failure_streak and persists.
+        Symmetric with `clear_drunk_state` / `clear_full_session` — all
+        mutations run under `self._lock` per the plan's Global Constraints."""
+        with self._lock:
             self.failure_streak = 0
             self._save()
 
