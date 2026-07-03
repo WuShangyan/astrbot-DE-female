@@ -10,9 +10,9 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
-from state import StateStore
-from parsing import extract_skill_name, infer_direction, extract_outcome
-from banners import (
+from .state import StateStore
+from .parsing import extract_skill_name, infer_direction, extract_outcome
+from .banners import (
     render_open_banner,
     render_close_banner,
     render_clear_banner,
@@ -21,7 +21,7 @@ from banners import (
     render_sleep_banner,
     _VOICE_BLEED_BODY_LINES,
 )
-from epigraphs import SKILL_EPIGRAPHS
+from .epigraphs import SKILL_EPIGRAPHS
 
 # ============================================================
 # 常量
