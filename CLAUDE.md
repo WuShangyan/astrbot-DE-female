@@ -17,15 +17,16 @@ A `VivianVale` class is registered as an AstrBot `Star` in `main.py`. AstrBot is
 main.py          VivianVale Star class, event/hook handlers, LLM injection
 state.py         StateStore dataclass (in-memory, single-session)
 parsing.py       Pure helpers: detect_toggle, extract_skill_name, infer_direction, extract_outcome
-banners.py       Banner string renderers (toggle/sleep/failure)
-**Banner rendering** lives in [`banners.py`](banners.py) with five framed functions sharing the `░▒▓ + 66 █ + ▓▒░` frame: `render_open_banner()` (DE activation, fixed opening epigraph), `render_close_banner(last_skill)` (DE deactivation, epigraph chosen by last skill), `render_clear_banner()` / `render_haze_banner()` (state-transition on direction change), and `render_voice_bleed_banner(skill, sample, body)` (DE-OFF spontaneous leak). `render_sleep_banner()` is the unframed 04:00-08:00 line. Add a new banner → add the function + smoke-test assertions to `banners.py`.
+banners.py       Banner string renderers (open/close/clear/haze/voice-bleed/sleep)
 epigraphs.py     Skill-idle whisper strings, organized by category
 personas/        persona_base.md + persona_de.md (Chinese prose)
 skills/          24 skill dirs + 1 help page (see below)
 metadata.yaml    AstrBot plugin manifest
 plugin.json      AstrBot plugin manifest (older/duplicate)
-├── state.json    # generated at runtime; per-conversation JSON state (gitignored)
+state.json       Per-conversation JSON state (gitignored, generated at runtime)
 ```
+
+**Banner rendering** lives in [`banners.py`](banners.py) with five framed functions sharing the `░▒▓ + 66 █ + ▓▒░` frame: `render_open_banner()` (DE activation, fixed opening epigraph), `render_close_banner(last_skill)` (DE deactivation, epigraph chosen by last skill), `render_clear_banner()` / `render_haze_banner()` (state-transition on direction change), and `render_voice_bleed_banner(skill, sample, body)` (DE-OFF spontaneous leak). `render_sleep_banner()` is the unframed 04:00-08:00 line. Add a new banner → add the function + smoke-test assertions to `banners.py`.
 
 ### `skills/` directory
 
