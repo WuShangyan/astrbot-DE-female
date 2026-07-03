@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import json
 import random
 from pathlib import Path
 
@@ -144,11 +145,14 @@ class VivianVale(Star):
             self.state.set_direction(conv_id, direction)
             self.state.touch_drunk(direction)
 
-        # ── DE OFF: voice bleed(LLM 生成,与上下文相关) ──
+        # ── DE OFF: voice bleed(3-tuple: 技能名 + 独白 + 本体一行) ──
         if not self.state.de_enabled and self._should_voice_bleed():
-            text = await self._generate_voice_bleed(event)
-            if text:
-                yield event.plain_result(text)
+            triple = await self._generate_voice_bleed(event)
+            if triple:
+                skill_name, sample_line, body_line = triple
+                yield event.plain_result(
+                    render_voice_bleed_banner(skill_name, sample_line, body_line)
+                )
 
     # --------------------------------------------------------
     # Duty 3: 注入 persona (LLM request hook, 不 yield)
@@ -320,38 +324,37 @@ class VivianVale(Star):
         """检查 voice bleed 是否应该触发(只做门控判断)"""
         return self.state.can_voice_bleed()
 
-    async def _generate_voice_bleed(self, event: AstrMessageEvent) -> str | None:
-        """调 LLM 生成一段与上下文相关的技能独白,不显示技能名"""
-        # 构建技能索引(名 + 一句话描述,供 LLM 选择)
-        skill_index_lines = []
-        for skill_id, body in self._skill_bodies.items():
-            cn_name = self._skill_cn_name(skill_id)
-            if not cn_name:
-                continue
-            # 取正文第二行作为简短描述(第一行是标题)
-            desc_lines = body.split("\n")
-            desc = ""
-            for line in desc_lines[1:]:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    desc = line[:60]
-                    break
-            skill_index_lines.append(f"- {cn_name}: {desc}")
+    async def _generate_voice_bleed(
+        self, event: AstrMessageEvent
+    ) -> tuple[str, str, str] | None:
+        """Voice-bleed: code picks skill_name and body_line; LLM only writes
+        the sample_line (one short utterance matching the chosen skill's voice).
 
-        skill_index = "\n".join(skill_index_lines)
+        Returns (skill_name, sample_line, body_line) or None on any failure.
+        Caller passes the tuple to render_voice_bleed_banner(...).
+        """
+        # 1. Code-side: pick a skill (random, excluding last voice-bleed skill)
+        from .epigraphs import SKILL_EPIGRAPHS  # relative import (matches AstrBot v4 plugin convention)
 
+        exclude = self.state._voice_bleed_last_skill
+        candidates = [k for k in SKILL_EPIGRAPHS if k != exclude]
+        if not candidates:
+            candidates = list(SKILL_EPIGRAPHS.keys())
+        skill_name = random.choice(candidates)
+
+        # 2. Code-side: pick a Vivian reaction line
+        from .banners import _VOICE_BLEED_BODY_LINES  # relative import
+        body_line = random.choice(_VOICE_BLEED_BODY_LINES)
+
+        # 3. LLM-side: write the skill's whisper (one sentence)
+        skill_desc = SKILL_EPIGRAPHS.get(skill_name, "")
         prompt = (
-            "你是 Vivian Vale,一个失忆的硬汉女警探。现在 DE 模式是关闭的,你不应该主动使用技能。\n"
-            "但你的脑子里偶尔会有一个声音自己冒出来——像残留的回响,不受你控制。\n\n"
-            "根据当前对话的上下文,从下面 24 个技能中选一个**最贴合当前话题**的,以那个技能的口吻生成一句独白。\n"
-            "要求:\n"
-            "1. 只输出 1 句话,8-30 字,像某个人在你耳边低声嘀咕\n"
-            "2. 不要输出技能名字、不要输出 [成功]/[失败] 标签\n"
-            "3. 语气参考该技能的性格(逻辑会冷分析,天人感应会诗意,通情达理会共情...)\n"
-            "4. 跟当前对话的话题相关,但不是直接回答用户的问题——是一个旁观的声音\n"
-            "5. 直接输出独白文本,不要加任何前缀或解释\n\n"
-            f"24 个技能:\n{skill_index}\n\n"
-            f"当前对话上下文:\n{event.message_str or ''}"
+            "你是 Vivian Vale,失忆硬汉女警探。DE 模式关闭时,脑子里偶尔会有一个声音漏出来。\n"
+            f"现在漏出的声音来自技能「{skill_name}」——这个声音的内核是:\n"
+            f"{skill_desc.strip()}\n\n"
+            "用这个技能的口吻,写一句 8-30 字的脑内独白(用'你'称呼用户)。\n"
+            "输出格式(JSON,严格): {\"sample\": \"<你的独白>\"}\n"
+            "不要加任何解释、标签、或额外文字。"
         )
 
         try:
@@ -360,10 +363,14 @@ class VivianVale(Star):
                 system_prompt=self._persona_base,
             )
             text = response.completion_text.strip()
-            if text:
-                text = self._scrub_identity(text)
-                self.state.record_voice_bleed("llm_generated")
-                return text
+            # Strip markdown code fences if present
+            if text.startswith("```"):
+                text = text.strip("`").lstrip("json").strip()
+            data = json.loads(text)
+            sample_line = data["sample"].strip()
+            if sample_line:
+                self.state.record_voice_bleed(skill_name)
+                return (skill_name, sample_line, body_line)
         except Exception:
             pass
         return None
