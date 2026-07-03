@@ -85,6 +85,8 @@ class VivianVale(Star):
         conv_id = event.unified_msg_origin
         last_skill = self.state.get_last_skill(conv_id)
         self.state.set_open(conv_id, False)
+        self.state.failure_streak = 0  # §4.3:芝麻关门清零 failure_streak
+        self.state._save()              # 立即持久化(单字段写)
         yield event.plain_result(render_close_banner(last_skill))
 
     # --------------------------------------------------------
@@ -95,13 +97,34 @@ class VivianVale(Star):
     @filter.event_message_type(EventMessageType.ALL, priority=1)
     async def on_message(self, event: AstrMessageEvent):
         now = datetime.datetime.now()
-        self.state.maybe_reset_daily(now.hour)
+        hour = now.hour
+        conv_id = event.unified_msg_origin
+        is_sleep_now = self.state.check_sleep_window(hour)
+        was_asleep = self.state.get_was_asleep(conv_id)
 
-        # ── 物理层: 睡眠窗口自动关闭 DE ──
-        if self.state.check_sleep_window(now.hour) and self.state.de_enabled:
-            conv_id = event.unified_msg_origin
-            self.state.set_open(conv_id, False)
-            self.state.opened_today = False  # separate from set_open — sleep truly closes the day
+        # ── 醒→睡 转换:首次进入睡眠窗口时自动收摊 ──
+        if (not was_asleep) and is_sleep_now:
+            if self.state.de_enabled:
+                last_skill = self.state.get_last_skill(conv_id)
+                self.state.set_open(conv_id, False)
+                self.state.clear_full_session(conv_id)
+                yield event.plain_result(render_close_banner(last_skill))
+            self.state.set_was_asleep(conv_id, True)
+            return  # auto-close banner already conveyed "she's asleep"
+
+        # ── 睡→醒 转换:首条醒来消息静默 reset drunk 相关状态 ──
+        if was_asleep and (not is_sleep_now):
+            self.state.clear_drunk_state(conv_id)
+            self.state.set_was_asleep(conv_id, False)
+            # fall through to normal wake-time processing
+
+        self.state.maybe_reset_daily(hour)
+
+        # ── 仍在睡眠窗口:任何后续消息都 yield sleep_banner ──
+        if is_sleep_now:
+            if self.state.de_enabled:
+                # 防御性:若 was_asleep 状态因 reload 缺失导致漏掉了 auto-close
+                self.state.set_open(conv_id, False)
             yield event.plain_result(render_sleep_banner())
             return
 
