@@ -10,17 +10,18 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star
 
-from .state import StateStore
-from .parsing import detect_toggle, extract_skill_name, infer_direction, extract_outcome
-from .banners import (
+from state import StateStore
+from parsing import extract_skill_name, infer_direction, extract_outcome
+from banners import (
     render_open_banner,
     render_close_banner,
     render_clear_banner,
     render_haze_banner,
     render_voice_bleed_banner,
     render_sleep_banner,
+    _VOICE_BLEED_BODY_LINES,
 )
-from .epigraphs import get_epigraph
+from epigraphs import SKILL_EPIGRAPHS
 
 # ============================================================
 # 常量
@@ -333,8 +334,6 @@ class VivianVale(Star):
         Caller passes the tuple to render_voice_bleed_banner(...).
         """
         # 1. Code-side: pick a skill (random, excluding last voice-bleed skill)
-        from .epigraphs import SKILL_EPIGRAPHS  # relative import (matches AstrBot v4 plugin convention)
-
         exclude = self.state._voice_bleed_last_skill
         candidates = [k for k in SKILL_EPIGRAPHS if k != exclude]
         if not candidates:
@@ -342,7 +341,6 @@ class VivianVale(Star):
         skill_name = random.choice(candidates)
 
         # 2. Code-side: pick a Vivian reaction line
-        from .banners import _VOICE_BLEED_BODY_LINES  # relative import
         body_line = random.choice(_VOICE_BLEED_BODY_LINES)
 
         # 3. LLM-side: write the skill's whisper (one sentence)
