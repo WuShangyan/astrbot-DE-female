@@ -65,8 +65,8 @@ Decomposition rationale: `state.py` owns persistence and per-conv state; `main.p
   - `was_asleep_last_check: dict[str, bool]` (new dataclass field, 13th)
   - `get_was_asleep(conv_id: str) -> bool`
   - `set_was_asleep(conv_id: str, was_asleep: bool) -> None`
-  - `clear_drunk_state(conv_id: str) -> None` (resets drunk_count=0, last_drink_at=None, failure_streak=0)
-  - `clear_full_session(conv_id: str) -> None` (resets last_skill + drunk_count + last_drink_at + last_direction_seen + failure_streak to None/0)
+  - `clear_drunk_state(conv_id: str) -> None` — resets **global typed fields** `drunk_counter=0`, `_drunk_timestamps=[]`, `failure_streak=0`. (These fields are global in round 1's implementation, not per-conv. Per spec they're per-conv but the underlying data model is mixed; round 2 follows the existing global shape.)
+  - `clear_full_session(conv_id: str) -> None` — clears per-conv `_last_skill[conv_id]=None`, per-conv `_direction_cache[conv_id]=None`, plus the three global fields above (drunk_counter, _drunk_timestamps, failure_streak).
   - `_save()` and `_load()` extended to persist/restore `was_asleep_last_check`
 
 - [ ] **Step 1: Add the 3 failing smoke tests to `state.py`'s `__main__` block**
@@ -219,28 +219,28 @@ Add the following methods to `StateStore`, **immediately after `set_last_skill`*
 
 
     def clear_drunk_state(self, conv_id: str) -> None:
-        """Wake hard-reset (§4.4.2 + §4.3 cross-reference): drunk_count=0,
-        last_drink_at=None, failure_streak=0. Per-conversation; does NOT
-        touch last_skill / last_direction_seen (those survive sleep per spec)."""
+        """Wake hard-reset (§4.4.2 + §4.3 cross-reference): clears the three
+        global drunk-related typed fields (drunk_counter, _drunk_timestamps,
+        failure_streak). Per spec these should be per-conv but the existing
+        implementation has them as global dataclass fields; round 2 follows
+        the existing shape to avoid a state-model refactor outside scope."""
         with self._lock:
-            d = self._bucket(conv_id)
-            d["drunk_count"] = 0
-            d["last_drink_at"] = None
-            d["failure_streak"] = 0
+            self.drunk_counter = 0
+            self._drunk_timestamps = []
+            self.failure_streak = 0
             self._save()
 
 
     def clear_full_session(self, conv_id: str) -> None:
-        """§4.4.7a auto-close cleanup: clears 5 fields so the next DE session
-        starts fresh. last_skill=None, drunk_count=0, last_drink_at=None,
-        last_direction_seen=None, failure_streak=0."""
+        """§4.4.7a auto-close cleanup: clears per-conv _last_skill +
+        _direction_cache for this conv, plus the three global drunk-related
+        fields. So the next DE session starts fresh for this conversation."""
         with self._lock:
-            d = self._bucket(conv_id)
-            d["last_skill"] = None
-            d["drunk_count"] = 0
-            d["last_drink_at"] = None
-            d["last_direction_seen"] = None
-            d["failure_streak"] = 0
+            self._last_skill[conv_id] = None
+            self._direction_cache[conv_id] = None
+            self.drunk_counter = 0
+            self._drunk_timestamps = []
+            self.failure_streak = 0
             self._save()
 ```
 
